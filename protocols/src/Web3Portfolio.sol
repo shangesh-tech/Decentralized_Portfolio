@@ -1,17 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
-import {ERC2771Context} from "@openzeppelin/contracts/metatx/ERC2771Context.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
-import {Context} from "@openzeppelin/contracts/utils/Context.sol";
 
 /**
  * @title Web3Portfolio
- * @notice Decentralized portfolio system with meta-transaction support
- * @dev Inherits ERC2771Context for gasless transactions
+ * @notice Decentralized portfolio system
  */
-contract Web3Portfolio is ERC2771Context, Ownable, Pausable {
+contract Web3Portfolio is Ownable, Pausable {
     uint256 public totalPortfolios;
     uint256 public totalDonations;
 
@@ -30,104 +27,115 @@ contract Web3Portfolio is ERC2771Context, Ownable, Pausable {
     event PortfolioCreated(address indexed owner, string userName);
     event PortfolioUpdated(address indexed owner, string userName);
     event PortfolioVisibilityUpdated(address indexed owner, string userName, bool isPrivate);
+    event PortfolioDeleted(address indexed owner);
     event DonationReceived(address indexed donor, uint256 amount);
     event DonationWithdrawn(address indexed owner, uint256 amount);
 
-    constructor(address trustedForwarder) ERC2771Context(trustedForwarder) Ownable(msg.sender) {}
+    constructor() Ownable(msg.sender) {}
 
     function _usernameHash(string calldata userName) internal pure returns (bytes32) {
         bytes32 hash;
         assembly {
-            let len := userName.length // 1) Read length directly from calldata
-            let dataPtr := userName.offset // 2) Read pointer to bytes in calldata
-            hash := keccak256(dataPtr, len) // 3) Hash that region in calldata
+            let len := userName.length
+            let dataPtr := userName.offset
+            hash := keccak256(dataPtr, len)
         }
         return hash;
     }
 
-    function createPortfolio(string calldata _userName, string calldata _ipfsHash, bool _isPrivate)
-        external
-        whenNotPaused
-    {
-        require(bytes(_userName).length > 0, "Username empty");
-        require(bytes(_ipfsHash).length > 0, "Invalid IPFS hash");
+    function createPortfolio(
+        string calldata userName,
+        string calldata ipfsHash,
+        bool isPrivate
+    ) external whenNotPaused {
+        require(bytes(userName).length > 0, "Username empty");
+        require(bytes(ipfsHash).length > 0, "Invalid IPFS hash");
 
-        bytes32 hash = _usernameHash(_userName);
-        address sender = _msgSender();
+        bytes32 userNameHash = _usernameHash(userName);
+        address sender = msg.sender;
 
-        require(!portfolios[hash].exists, "Username taken");
-        require(addressToUsername[sender] == bytes32(0), "Address already has portfolio");
+        require(!portfolios[userNameHash].exists, "Username taken");
+        require(addressToUsername[sender] == bytes32(0), "Address already registered");
 
-        portfolios[hash] = Portfolio({
+        portfolios[userNameHash] = Portfolio({
             ethAddress: sender,
-            ipfsDocumentHash: _ipfsHash,
-            isPrivate: _isPrivate,
+            ipfsDocumentHash: ipfsHash,
+            isPrivate: isPrivate,
             exists: true,
             createdAt: block.timestamp,
             lastUpdated: block.timestamp
         });
 
-        addressToUsername[sender] = hash;
+        addressToUsername[sender] = userNameHash;
         totalPortfolios++;
 
-        emit PortfolioCreated(sender, _userName);
+        emit PortfolioCreated(sender, userName);
     }
 
     function updatePortfolioHash(
-        string calldata _userName,
-        string calldata _newHash // ✅ FIXED: Removed "Context" typo
-    )
-        external
-        whenNotPaused
-    {
-        bytes32 hash = _usernameHash(_userName);
-        Portfolio storage p = portfolios[hash];
-        address sender = _msgSender();
+        string calldata userName,
+        string calldata newIpfsHash
+    ) external whenNotPaused {
+        bytes32 userNameHash = _usernameHash(userName);
+        Portfolio storage p = portfolios[userNameHash];
 
         require(p.exists, "Portfolio not found");
-        require(p.ethAddress == sender, "Not portfolio owner");
-        require(bytes(_newHash).length > 0, "Invalid IPFS hash");
+        require(p.ethAddress == msg.sender, "Not portfolio owner");
+        require(bytes(newIpfsHash).length > 0, "Invalid IPFS hash");
 
-        if (keccak256(bytes(p.ipfsDocumentHash)) != keccak256(bytes(_newHash))) {
-            p.ipfsDocumentHash = _newHash;
+        if (keccak256(bytes(p.ipfsDocumentHash)) != keccak256(bytes(newIpfsHash))) {
+            p.ipfsDocumentHash = newIpfsHash;
             p.lastUpdated = block.timestamp;
         }
 
-        emit PortfolioUpdated(sender, _userName);
+        emit PortfolioUpdated(msg.sender, userName);
     }
 
-    function updatePortfolioVisibility(string calldata _userName, bool _isPrivate) external whenNotPaused {
-        bytes32 hash = _usernameHash(_userName);
-        Portfolio storage p = portfolios[hash];
-        address sender = _msgSender();
+    function updatePortfolioVisibility(
+        string calldata userName,
+        bool isPrivate
+    ) external whenNotPaused {
+        bytes32 userNameHash = _usernameHash(userName);
+        Portfolio storage p = portfolios[userNameHash];
 
         require(p.exists, "Portfolio not found");
-        require(p.ethAddress == sender, "Not portfolio owner");
+        require(p.ethAddress == msg.sender, "Not portfolio owner");
 
-        if (p.isPrivate != _isPrivate) {
-            p.isPrivate = _isPrivate;
+        if (p.isPrivate != isPrivate) {
+            p.isPrivate = isPrivate;
             p.lastUpdated = block.timestamp;
         }
 
-        emit PortfolioVisibilityUpdated(sender, _userName, _isPrivate);
+        emit PortfolioVisibilityUpdated(msg.sender, userName, isPrivate);
+    }
+
+    function deleteMyPortfolio() external whenNotPaused {
+        bytes32 userNameHash = addressToUsername[msg.sender];
+        require(userNameHash != bytes32(0), "Portfolio not found");
+
+        delete portfolios[userNameHash];
+        delete addressToUsername[msg.sender];
+        totalPortfolios--;
+
+        emit PortfolioDeleted(msg.sender);
     }
 
     function getMyPortfolio() external view returns (Portfolio memory) {
-        address sender = _msgSender();
-        bytes32 hash = addressToUsername[sender];
-        require(hash != bytes32(0), "Portfolio not found");
-        return portfolios[hash];
+        bytes32 userNameHash = addressToUsername[msg.sender];
+        require(userNameHash != bytes32(0), "Portfolio not found");
+        return portfolios[userNameHash];
     }
 
-    function getPortfolioByUsername(string calldata _userName) external view returns (Portfolio memory) {
-        bytes32 hash = _usernameHash(_userName);
-        Portfolio memory p = portfolios[hash];
-        address sender = _msgSender();
+    function getPortfolioByUsername(
+        string calldata userName
+    ) external view returns (Portfolio memory) {
+        bytes32 userNameHash = _usernameHash(userName);
+        Portfolio memory p = portfolios[userNameHash];
 
         require(p.exists, "Portfolio not found");
 
         if (p.isPrivate) {
-            require(p.ethAddress == sender, "Private portfolio");
+            require(p.ethAddress == msg.sender, "Private portfolio");
         }
 
         return p;
@@ -136,12 +144,12 @@ contract Web3Portfolio is ERC2771Context, Ownable, Pausable {
     function donate() external payable whenNotPaused {
         require(msg.value > 0, "Zero donation");
         totalDonations += msg.value;
-        emit DonationReceived(_msgSender(), msg.value);
+        emit DonationReceived(msg.sender, msg.value);
     }
 
     function withdraw(uint256 amount) external onlyOwner {
         require(address(this).balance >= amount, "Insufficient balance");
-        (bool ok,) = owner().call{value: amount}("");
+        (bool ok, ) = owner().call{value: amount}("");
         require(ok, "Withdraw failed");
         emit DonationWithdrawn(owner(), amount);
     }
@@ -160,17 +168,5 @@ contract Web3Portfolio is ERC2771Context, Ownable, Pausable {
 
     fallback() external payable {
         revert("Invalid call");
-    }
-
-    function _msgSender() internal view virtual override(Context, ERC2771Context) returns (address) {
-        return ERC2771Context._msgSender();
-    }
-
-    function _msgData() internal view virtual override(Context, ERC2771Context) returns (bytes calldata) {
-        return ERC2771Context._msgData();
-    }
-
-    function _contextSuffixLength() internal view virtual override(Context, ERC2771Context) returns (uint256) {
-        return ERC2771Context._contextSuffixLength();
     }
 }
