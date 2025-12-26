@@ -1,6 +1,6 @@
 "use client";
 
-import { Github, Linkedin, Twitter } from "lucide-react";
+import { FaGithub, FaLinkedin, FaTwitter } from "react-icons/fa";
 
 export default function Footer() {
   return (
@@ -26,7 +26,7 @@ export default function Footer() {
               className="rounded-full p-1.5 hover:bg-gray-100 hover:text-gray-900"
               aria-label="GitHub"
             >
-              <Github className="h-4 w-4" />
+              <FaGithub className="h-4 w-4" />
             </a>
             <a
               href="https://linkedin.com/in/yourusername"
@@ -35,7 +35,7 @@ export default function Footer() {
               className="rounded-full p-1.5 hover:bg-gray-100 hover:text-gray-900"
               aria-label="LinkedIn"
             >
-              <Linkedin className="h-4 w-4" />
+              <FaLinkedin className="h-4 w-4" />
             </a>
             <a
               href="https://twitter.com/yourusername"
@@ -44,7 +44,7 @@ export default function Footer() {
               className="rounded-full p-1.5 hover:bg-gray-100 hover:text-gray-900"
               aria-label="Twitter"
             >
-              <Twitter className="h-4 w-4" />
+              <FaTwitter className="h-4 w-4" />
             </a>
           </div>
         </div>
