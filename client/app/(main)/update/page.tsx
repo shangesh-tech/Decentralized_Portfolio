@@ -1,16 +1,15 @@
 "use client";
 
 import { useState, ChangeEvent, FormEvent, useEffect } from "react";
-import { FaGithub, FaLinkedin, FaTwitter, FaGlobe } from "react-icons/fa";
+import { Github, Linkedin, Twitter, Globe, Loader2 } from "lucide-react";
 import { useActiveAccount, useSendTransaction } from "thirdweb/react";
-import { getContract, prepareContractCall } from "thirdweb";
-import { upload } from "thirdweb/storage";
+import { getContract, prepareContractCall, eth_call, getRpcClient, encode } from "thirdweb";
+import { upload, download } from "thirdweb/storage";
 import { client } from "@/lib/client";
 import { defaultChain } from "@/lib/chains";
-import { Web3PortfolioAddress, TrustedForwarderAddress } from "@/lib/constant";
+import { Web3PortfolioAddress } from "@/lib/constant";
 import toast from "react-hot-toast";
 import { useRouter } from "next/navigation";
-
 
 type FormState = {
   name: string;
@@ -27,6 +26,17 @@ type FormState = {
   certifications: string;
   about: string;
   bgColor: string;
+  isPrivate: boolean;
+  avatarUrl: string;
+};
+
+type Portfolio = {
+  ethAddress: string;
+  ipfsDocumentHash: string;
+  isPrivate: boolean;
+  exists: boolean;
+  createdAt: bigint;
+  lastUpdated: bigint;
 };
 
 const contract = getContract({
@@ -35,35 +45,134 @@ const contract = getContract({
   address: Web3PortfolioAddress,
 });
 
-export default function PortfolioOnboardPage() {
-
+export default function UpdatePortfolioPage() {
   const router = useRouter();
   const account = useActiveAccount();
   const { mutate: sendTransaction, isPending } = useSendTransaction();
 
+  const [existingUsername, setExistingUsername] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [hasPortfolio, setHasPortfolio] = useState(false);
+
   const [form, setForm] = useState<FormState>({
-    name: "Jai Menon",
-    role: "Blockchain & Web3 Engineer",
-    location: "Bangalore, India",
-    email: "jai.menon@example.com",
-    website: "https://jaimenon.xyz",
-    github: "https://github.com/jaimenon",
-    linkedin: "https://linkedin.com/in/jaimenon",
-    twitter: "https://twitter.com/jaimenon",
-    education:
-      "B.Tech Computer Science - NACC+ Institute, Bangalore (2023–2027), Higher Secondary - Chennai Public School (2023)",
-    experience:
-      "Web3 Intern - DeFi Labs (2024, Remote), Freelance Smart Contract Developer (2023–Present)",
-    projects:
-      "GhostSwap - MEV Protected DEX, Amal Wallet - Multi-chain Quantum-safe Wallet, EduChain - On-chain Certificates LMS",
-    certifications:
-      "Ethereum Developer Bootcamp, Certified Solidity Developer, Zero-Knowledge Proofs Fundamentals",
-    about:
-      "Web3 engineer focused on DeFi, account abstraction, and security. Loves building infra for the Indian blockchain ecosystem and shipping battle-tested smart contracts.",
+    name: "",
+    role: "",
+    location: "",
+    email: "",
+    website: "",
+    github: "",
+    linkedin: "",
+    twitter: "",
+    education: "",
+    experience: "",
+    projects: "",
+    certifications: "",
+    about: "",
     bgColor: "#f5f5f5",
+    isPrivate: false,
+    avatarUrl: "",
   });
 
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
+  const [avatarFile, setAvatarFile] = useState<File | null>(null);
+  const [existingAvatarUrl, setExistingAvatarUrl] = useState<string | null>(null);
+
+  // Load existing portfolio for editing
+  useEffect(() => {
+    async function loadExistingPortfolio() {
+      if (!account) {
+        setIsLoading(false);
+        return;
+      }
+
+      try {
+        const transaction = prepareContractCall({
+          contract,
+          method: "function getMyPortfolio() view returns ((address ethAddress, string ipfsDocumentHash, bool isPrivate, bool exists, uint256 createdAt, uint256 lastUpdated))",
+          params: [],
+        });
+
+        const rpcClient = getRpcClient({ client, chain: defaultChain });
+        const encodedData = await encode(transaction);
+        const resultHex = await eth_call(rpcClient, {
+          to: Web3PortfolioAddress,
+          data: encodedData,
+          from: account.address as `0x${string}`,
+        });
+
+        const { decodeAbiParameters } = await import("viem");
+        const decoded = decodeAbiParameters(
+          [
+            {
+              type: "tuple",
+              components: [
+                { name: "ethAddress", type: "address" },
+                { name: "ipfsDocumentHash", type: "string" },
+                { name: "isPrivate", type: "bool" },
+                { name: "exists", type: "bool" },
+                { name: "createdAt", type: "uint256" },
+                { name: "lastUpdated", type: "uint256" },
+              ],
+            },
+          ],
+          resultHex as `0x${string}`
+        );
+
+        const portfolio = decoded[0] as Portfolio;
+
+        if (portfolio.exists) {
+          setHasPortfolio(true);
+
+          // Fetch IPFS data
+          const response = await download({
+            client,
+            uri: portfolio.ipfsDocumentHash,
+          });
+          const data = await response.json();
+
+          setForm({
+            name: data.name || "",
+            role: data.role || "",
+            location: data.location || "",
+            email: data.email || "",
+            website: data.website || "",
+            github: data.github || "",
+            linkedin: data.linkedin || "",
+            twitter: data.twitter || "",
+            education: data.education || "",
+            experience: data.experience || "",
+            projects: data.projects || "",
+            certifications: data.certifications || "",
+            about: data.about || "",
+            bgColor: data.bgColor || "#f5f5f5",
+            isPrivate: portfolio.isPrivate,
+            avatarUrl: data.avatarUrl || "",
+          });
+          setExistingUsername(data.name);
+          
+          // Set existing avatar URL - use IPFS avatar if exists, otherwise generate from name
+          if (data.avatarUrl) {
+            // Convert IPFS URI to gateway URL for preview
+            const ipfsUrl = data.avatarUrl.replace("ipfs://", "https://ipfs.io/ipfs/");
+            setExistingAvatarUrl(ipfsUrl);
+          } else if (data.name) {
+            setExistingAvatarUrl(
+              `https://ui-avatars.com/api/?name=${encodeURIComponent(data.name)}&size=200&background=1f2937&color=fff&bold=true`
+            );
+          }
+        } else {
+          setHasPortfolio(false);
+        }
+      } catch (error) {
+        console.log("No existing portfolio found:", error);
+        setHasPortfolio(false);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+
+    loadExistingPortfolio();
+  }, [account]);
 
   function handleChange(e: ChangeEvent<HTMLInputElement> | ChangeEvent<HTMLTextAreaElement>) {
     const { name, value } = e.target;
@@ -73,6 +182,7 @@ export default function PortfolioOnboardPage() {
   function handleAvatarChange(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (file) {
+      setAvatarFile(file); // Store file for IPFS upload
       const reader = new FileReader();
       reader.onload = (event) => {
         if (typeof event.target?.result === "string") {
@@ -91,15 +201,35 @@ export default function PortfolioOnboardPage() {
       return;
     }
 
-    // 1. Capture the toast ID so we can dismiss it later
+    if (!existingUsername) {
+      toast.error("No portfolio found to update!");
+      return;
+    }
+
     const toastId = toast.loading("Uploading to IPFS...");
 
     try {
-      // 1. Upload Form Data to IPFS
+      // Prepare form data with avatar URL
+      const portfolioData = { ...form };
+
+      // Upload avatar to IPFS if a new one was selected
+      if (avatarFile) {
+        toast.loading("Uploading avatar to IPFS...", { id: toastId });
+        const avatarUri = await upload({
+          client,
+          files: [avatarFile],
+        });
+        console.log("Avatar IPFS URI:", avatarUri);
+        portfolioData.avatarUrl = avatarUri;
+      }
+
+      toast.loading("Uploading portfolio data to IPFS...", { id: toastId });
+
+      // Upload Form Data to IPFS
       const uri = await upload({
         client,
         files: [
-          new File([JSON.stringify(form)], `portfolio-${form.name}-${Date.now()}.json`, {
+          new File([JSON.stringify(portfolioData)], `portfolio-${form.name}-${Date.now()}.json`, {
             type: "application/json",
           }),
         ],
@@ -107,65 +237,100 @@ export default function PortfolioOnboardPage() {
 
       console.log("IPFS URI:", uri);
 
-      // Update the loading message (Optional, keeps the same toast)
       toast.loading("Waiting for transaction signature...", { id: toastId });
 
-      // 2. Prepare the Contract Call
+      // UPDATE existing portfolio
       const transaction = prepareContractCall({
         contract,
-        method: "function createPortfolio(string _userName, string _ipfsHash, bool _isPrivate)",
-        params: [form.name, uri, false],
+        method: "function updatePortfolioHash(string _userName, string _newIpfsHash)",
+        params: [existingUsername, uri],
       });
 
-      // 3. Send Transaction
       sendTransaction(transaction, {
         onSuccess: (tx) => {
-          // DISMISS loading toast AND show success
           toast.dismiss(toastId);
-          toast.success("Portfolio created successfully!");
+          toast.success("Portfolio updated successfully!");
 
           console.log("tx", tx);
           console.log("Transaction hash:", tx.transactionHash);
+
+          setTimeout(() => {
+            router.push("/");
+          }, 1500);
         },
         onError: (err) => {
-          // DISMISS loading toast AND show error
           toast.dismiss(toastId);
           console.error("Transaction failed:", err);
           toast.error("Transaction failed. Check console.");
         },
       });
-
     } catch (error) {
-      // DISMISS loading toast on catch block too
       toast.dismiss(toastId);
-      console.error("Error creating portfolio:", error);
+      console.error("Error:", error);
       toast.error("Something went wrong during upload.");
     }
   }
-
 
   const splitList = (value: string) => {
     const list = value.split(",").map((item) => item.trim());
     return list;
   };
 
-  useEffect(() => {
-    if (!account) {
-      toast.error("Wallet not connected!");
-      router.push("/");
-    }
-  }, [account]);
+  // Get the avatar to display - prefer uploaded preview, then existing
+  const displayAvatar = avatarPreview || existingAvatarUrl;
+
+  // Show loading while checking for existing portfolio
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <Loader2 className="h-8 w-8 animate-spin text-gray-900 mx-auto mb-4" />
+          <p className="text-gray-600">Loading your portfolio...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!account) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <h1 className="text-2xl font-bold text-gray-900 mb-4">Connect Your Wallet</h1>
+          <p className="text-gray-500">Please connect your wallet to update your portfolio</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!hasPortfolio) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center max-w-md">
+          <h1 className="text-2xl font-bold text-gray-900 mb-4">No Portfolio Found</h1>
+          <p className="text-gray-500 mb-6">
+            You don&apos;t have a portfolio yet. Create one first!
+          </p>
+          <button
+            onClick={() => router.push("/new")}
+            className="px-6 py-3 bg-gray-900 text-white rounded-lg font-semibold hover:bg-black transition"
+          >
+            Create Portfolio
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="mx-auto max-w-7xl px-4 py-8 md:px-8">
         <div className="flex flex-col lg:flex-row gap-10">
           {/* LEFT: fixed phone mockup */}
-          <div className="lg:w-[400px] lg:shrink-0">
+          <div className="lg:w-100 lg:shrink-0">
             <div className="lg:sticky lg:top-6 flex justify-center">
-              <div className="relative w-[320px] sm:w-[360px] h-[640px] border-14 border-gray-900 rounded-[40px] shadow-2xl bg-white overflow-hidden">
+              <div className="relative w-[320px] sm:w-90 h-160 border-14 border-gray-900 rounded-[40px] shadow-2xl bg-white overflow-hidden">
                 {/* Notch */}
-                <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[120px] h-[28px] bg-gray-900 rounded-b-[20px] z-10" />
+                <div className="absolute top-0 left-1/2 -translate-x-1/2 w-30 h-7 bg-gray-900 rounded-b-[20px] z-10" />
 
                 {/* Content with user-selected bg color */}
                 <div
@@ -176,14 +341,13 @@ export default function PortfolioOnboardPage() {
                     msOverflowStyle: "none"
                   }}
                 >
-
                   {/* Top section */}
                   <div className="flex flex-col items-center text-center">
                     <div className="w-24 h-24 rounded-full bg-linear-to-br from-gray-800 to-gray-600 flex items-center justify-center text-3xl text-white shadow-lg overflow-hidden">
-                      {avatarPreview ? (
+                      {displayAvatar ? (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img
-                          src={avatarPreview}
+                          src={displayAvatar}
                           alt="Avatar"
                           className="h-full w-full object-cover"
                         />
@@ -216,7 +380,7 @@ export default function PortfolioOnboardPage() {
                       )}
                       {form.website && (
                         <span className="inline-flex items-center gap-1 rounded-full bg-white/80 px-3 py-1 text-gray-800 shadow-sm">
-                          <FaGlobe className="text-[10px]" />
+                          <Globe className="text-[10px]" />
                           {form.website}
                         </span>
                       )}
@@ -225,30 +389,18 @@ export default function PortfolioOnboardPage() {
                     {/* Social icons */}
                     <div className="mt-4 flex gap-4 text-gray-600 text-lg">
                       {form.github && (
-                        <a
-                          href={form.github}
-                          className="hover:text-gray-900"
-                          aria-label="GitHub"
-                        >
-                          <FaGithub />
+                        <a href={form.github} className="hover:text-gray-900" aria-label="GitHub">
+                          <Github />
                         </a>
                       )}
                       {form.linkedin && (
-                        <a
-                          href={form.linkedin}
-                          className="hover:text-gray-900"
-                          aria-label="LinkedIn"
-                        >
-                          <FaLinkedin />
+                        <a href={form.linkedin} className="hover:text-gray-900" aria-label="LinkedIn">
+                          <Linkedin />
                         </a>
                       )}
                       {form.twitter && (
-                        <a
-                          href={form.twitter}
-                          className="hover:text-gray-900"
-                          aria-label="Twitter"
-                        >
-                          <FaTwitter />
+                        <a href={form.twitter} className="hover:text-gray-900" aria-label="Twitter">
+                          <Twitter />
                         </a>
                       )}
                     </div>
@@ -274,10 +426,7 @@ export default function PortfolioOnboardPage() {
                         </h2>
                         <ul className="space-y-1">
                           {splitList(form.education).map((item, i) => (
-                            <li
-                              key={i}
-                              className="flex gap-1.5 text-[11px] text-gray-700"
-                            >
+                            <li key={i} className="flex gap-1.5 text-[11px] text-gray-700">
                               <span className="mt-0.5 text-gray-400">•</span>
                               <span>{item}</span>
                             </li>
@@ -293,10 +442,7 @@ export default function PortfolioOnboardPage() {
                         </h2>
                         <ul className="space-y-1">
                           {splitList(form.experience).map((item, i) => (
-                            <li
-                              key={i}
-                              className="flex gap-1.5 text-[11px] text-gray-700"
-                            >
+                            <li key={i} className="flex gap-1.5 text-[11px] text-gray-700">
                               <span className="mt-0.5 text-gray-400">•</span>
                               <span>{item}</span>
                             </li>
@@ -312,10 +458,7 @@ export default function PortfolioOnboardPage() {
                         </h2>
                         <ul className="space-y-1">
                           {splitList(form.projects).map((item, i) => (
-                            <li
-                              key={i}
-                              className="flex gap-1.5 text-[11px] text-white"
-                            >
+                            <li key={i} className="flex gap-1.5 text-[11px] text-white">
                               <span className="mt-0.5 text-gray-500">•</span>
                               <span>{item}</span>
                             </li>
@@ -331,10 +474,7 @@ export default function PortfolioOnboardPage() {
                         </h2>
                         <ul className="space-y-1">
                           {splitList(form.certifications).map((item, i) => (
-                            <li
-                              key={i}
-                              className="flex gap-1.5 text-[11px] text-gray-700"
-                            >
+                            <li key={i} className="flex gap-1.5 text-[11px] text-gray-700">
                               <span className="mt-0.5 text-gray-400">•</span>
                               <span>{item}</span>
                             </li>
@@ -350,12 +490,16 @@ export default function PortfolioOnboardPage() {
 
           {/* RIGHT: scrollable form */}
           <div className="flex-1 bg-white rounded-2xl shadow-lg border border-gray-100 p-6 md:p-8">
-            <h1 className="text-2xl md:text-3xl font-bold text-gray-900">
-              Personal portfolio
-            </h1>
+            <div className="flex items-center justify-between mb-1">
+              <h1 className="text-2xl md:text-3xl font-bold text-gray-900">
+                Update Portfolio
+              </h1>
+              <span className="text-xs bg-blue-100 text-blue-700 px-3 py-1 rounded-full font-medium">
+                Editing
+              </span>
+            </div>
             <p className="mt-1 text-sm text-gray-500">
-              Edit the sample data on the right and see your phone portfolio
-              update in real time.
+              Update your portfolio details below. Changes will be saved to IPFS and blockchain.
             </p>
 
             <form className="mt-6 space-y-5" onSubmit={handleSubmit}>
@@ -403,15 +547,15 @@ export default function PortfolioOnboardPage() {
               <div className="grid gap-4 md:grid-cols-2">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Full name *
+                    Full name * <span className="text-xs text-gray-400">(cannot be changed)</span>
                   </label>
                   <input
                     name="name"
                     value={form.name}
-                    onChange={handleChange}
                     placeholder="Your full name"
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm bg-gray-100 cursor-not-allowed"
                     required
+                    disabled
                   />
                 </div>
                 <div>
@@ -579,6 +723,26 @@ export default function PortfolioOnboardPage() {
                 />
               </div>
 
+              {/* Privacy Toggle */}
+              <div className="flex items-center gap-3 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                <input
+                  type="checkbox"
+                  id="isPrivate"
+                  name="isPrivate"
+                  checked={form.isPrivate}
+                  onChange={(e) => setForm((prev) => ({ ...prev, isPrivate: e.target.checked }))}
+                  className="h-5 w-5 rounded border-gray-300 text-gray-900 focus:ring-gray-900 cursor-pointer"
+                />
+                <div>
+                  <label htmlFor="isPrivate" className="text-sm font-medium text-gray-700 cursor-pointer">
+                    Make portfolio private
+                  </label>
+                  <p className="text-xs text-gray-500">
+                    Only you can view your portfolio. Others will see &quot;Private portfolio&quot; message.
+                  </p>
+                </div>
+              </div>
+
               <button
                 type="submit"
                 disabled={isPending}
@@ -587,10 +751,10 @@ export default function PortfolioOnboardPage() {
                 {isPending ? (
                   <>
                     <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                    Minting Portfolio...
+                    Updating Portfolio...
                   </>
                 ) : (
-                  "Mint Portfolio On-Chain"
+                  "Update Portfolio On-Chain"
                 )}
               </button>
             </form>

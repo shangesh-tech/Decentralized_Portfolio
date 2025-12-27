@@ -13,10 +13,12 @@ import {
   Plus,
   Copy,
   Loader2,
+  Lock,
+  Unlock,
 } from "lucide-react";
 import toast from "react-hot-toast";
-import { useActiveAccount } from "thirdweb/react";
-import { getContract, readContract } from "thirdweb";
+import { useActiveAccount, useSendTransaction } from "thirdweb/react";
+import { getContract, prepareContractCall, eth_call, getRpcClient, encode } from "thirdweb";
 import { client } from "@/lib/client";
 import { defaultChain } from "@/lib/chains";
 import { Web3PortfolioAddress } from "@/lib/constant";
@@ -53,10 +55,13 @@ type PortfolioData = {
   certifications: string;
   about: string;
   bgColor: string;
+  isPrivate: boolean;
+  avatarUrl?: string;
 };
 
 export default function Home() {
   const account = useActiveAccount();
+  const { mutate: sendTransaction, isPending: isDeleting } = useSendTransaction();
   const [portfolioFromChain, setPortfolioFromChain] = useState<Portfolio | null>(null);
   const [portfolioData, setPortfolioData] = useState<PortfolioData | null>(null);
   const [isLoadingChain, setIsLoadingChain] = useState(false);
@@ -73,22 +78,58 @@ export default function Home() {
 
       setIsLoadingChain(true);
       try {
-        // Call getMyPortfolio() - Fixed method signature format
-        const result = await readContract({
+        // Prepare the contract call
+        const transaction = prepareContractCall({
           contract,
           method: "function getMyPortfolio() view returns ((address ethAddress, string ipfsDocumentHash, bool isPrivate, bool exists, uint256 createdAt, uint256 lastUpdated))",
           params: [],
         });
 
-        console.log(result);
+        // Get the RPC client
+        const rpcClient = getRpcClient({ client, chain: defaultChain });
 
-        setPortfolioFromChain(result as Portfolio);
+        // Make eth_call with the user's address as 'from' so msg.sender works
+        const encodedData = await encode(transaction);
+        const resultHex = await eth_call(rpcClient, {
+          to: Web3PortfolioAddress,
+          data: encodedData,
+          from: account.address as `0x${string}`, // This makes msg.sender = user's address
+        });
+
+        // Decode the result manually
+        // The result is ABI-encoded tuple: (address, string, bool, bool, uint256, uint256)
+        const { decodeAbiParameters } = await import("viem");
+        const decoded = decodeAbiParameters(
+          [
+            {
+              type: "tuple",
+              components: [
+                { name: "ethAddress", type: "address" },
+                { name: "ipfsDocumentHash", type: "string" },
+                { name: "isPrivate", type: "bool" },
+                { name: "exists", type: "bool" },
+                { name: "createdAt", type: "uint256" },
+                { name: "lastUpdated", type: "uint256" },
+              ],
+            },
+          ],
+          resultHex as `0x${string}`
+        );
+
+        const result = decoded[0] as Portfolio;
+        console.log("Portfolio from chain:", result);
+
+        if (result.exists) {
+          setPortfolioFromChain(result);
+        } else {
+          setPortfolioFromChain(null);
+        }
       } catch (error: any) {
+        console.error("Error reading contract:", error);
         // If error contains "Portfolio not found", user has no portfolio
         if (error.message?.includes("Portfolio not found") || error.message?.includes("execution reverted")) {
           setPortfolioFromChain(null);
         } else {
-          console.error("Error reading contract:", error);
           toast.error("Failed to load portfolio from blockchain");
         }
       } finally {
@@ -131,7 +172,45 @@ export default function Home() {
 
   // Handle delete
   const handleDelete = () => {
-    toast.error("Delete functionality coming soon! You'll need to implement a delete function in your contract.");
+    if (!account) {
+      toast.error("Please connect your wallet first!");
+      return;
+    }
+
+    // Confirm before deleting
+    if (!window.confirm("Are you sure you want to delete your portfolio? This action cannot be undone.")) {
+      return;
+    }
+
+    const toastId = toast.loading("Deleting portfolio...");
+
+    try {
+      const transaction = prepareContractCall({
+        contract,
+        method: "function deleteMyPortfolio()",
+        params: [],
+      });
+
+      sendTransaction(transaction, {
+        onSuccess: (tx) => {
+          toast.dismiss(toastId);
+          toast.success("Portfolio deleted successfully!");
+          console.log("Delete tx:", tx.transactionHash);
+          // Clear local state
+          setPortfolioFromChain(null);
+          setPortfolioData(null);
+        },
+        onError: (err) => {
+          toast.dismiss(toastId);
+          console.error("Delete failed:", err);
+          toast.error("Failed to delete portfolio. Check console.");
+        },
+      });
+    } catch (error) {
+      toast.dismiss(toastId);
+      console.error("Error deleting portfolio:", error);
+      toast.error("Something went wrong.");
+    }
   };
 
   // Copy URL function
@@ -205,17 +284,46 @@ export default function Home() {
 
         <div className="overflow-hidden rounded-3xl bg-white shadow-xl ring-1 ring-gray-200/50">
           {/* Header / Cover area */}
-          <div className="h-32 bg-gradient-to-r from-gray-900 to-gray-700 sm:h-40" />
+          <div 
+            className="h-32 sm:h-40"
+            style={{ 
+              background: portfolioData.bgColor 
+                ? `linear-gradient(135deg, ${portfolioData.bgColor} 0%, #374151 100%)`
+                : 'linear-gradient(to right, #111827, #374151)'
+            }}
+          />
 
           <div className="relative px-6 pb-8 sm:px-10">
             {/* Avatar - overlapping the cover */}
             <div className="absolute -top-12 sm:-top-16">
-              <div className="flex h-24 w-24 items-center justify-center rounded-full border-4 border-white bg-gray-900 text-2xl font-bold text-white shadow-md sm:h-32 sm:w-32 sm:text-4xl">
-                {portfolioData.name
-                  .split(" ")
-                  .map((n) => n[0])
-                  .join("")}
+              <div className="flex h-24 w-24 items-center justify-center rounded-full border-4 border-white bg-gray-900 text-2xl font-bold text-white shadow-md sm:h-32 sm:w-32 sm:text-4xl overflow-hidden">
+                {portfolioData.avatarUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={portfolioData.avatarUrl.replace("ipfs://", "https://ipfs.io/ipfs/")}
+                    alt="Avatar"
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  portfolioData.name
+                    .split(" ")
+                    .map((n) => n[0])
+                    .join("")
+                )}
               </div>
+            </div>
+
+            {/* Privacy Badge */}
+            <div className="absolute -top-4 left-6 sm:left-10">
+              {portfolioFromChain.isPrivate ? (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-700 border border-amber-200">
+                  <Lock className="h-3 w-3" /> Private
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-green-100 px-3 py-1 text-xs font-medium text-green-700 border border-green-200">
+                  <Unlock className="h-3 w-3" /> Public
+                </span>
+              )}
             </div>
 
             {/* Action Buttons (Top Right) */}
@@ -228,16 +336,22 @@ export default function Home() {
                 <Copy className="h-4 w-4" />
               </button>
               <Link
-                href="/new"
+                href="/update"
                 className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 hover:text-gray-900 transition"
               >
                 <Edit2 className="h-4 w-4 text-gray-500" /> Update
               </Link>
               <button
                 onClick={handleDelete}
-                className="flex items-center gap-2 rounded-lg border border-red-100 bg-red-50 px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-100 transition"
+                disabled={isDeleting}
+                className="flex items-center gap-2 rounded-lg border border-red-100 bg-red-50 px-4 py-2 text-sm font-medium text-red-600 hover:bg-red-100 transition disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <Trash2 className="h-4 w-4" /> Delete
+                {isDeleting ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Trash2 className="h-4 w-4" />
+                )}
+                {isDeleting ? "Deleting..." : "Delete"}
               </button>
             </div>
 
