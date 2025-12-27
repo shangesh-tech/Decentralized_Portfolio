@@ -3,7 +3,7 @@
 import { useState, ChangeEvent, FormEvent, useEffect } from "react";
 import { Github, Linkedin, Twitter, Globe, Loader2 } from "lucide-react";
 import { useActiveAccount, useSendTransaction } from "thirdweb/react";
-import { getContract, prepareContractCall, eth_call, getRpcClient, encode } from "thirdweb";
+import { getContract, prepareContractCall, readContract } from "thirdweb";
 import { upload, download } from "thirdweb/storage";
 import { client } from "@/lib/client";
 import { defaultChain } from "@/lib/chains";
@@ -80,55 +80,39 @@ export default function UpdatePortfolioPage() {
   // Load existing portfolio for editing
   useEffect(() => {
     async function loadExistingPortfolio() {
-      if (!account) {
+      if (!account?.address) {
         setIsLoading(false);
         return;
       }
 
+      setIsLoading(true);
+
       try {
-        const transaction = prepareContractCall({
+        console.log("📡 Loading portfolio for update...");
+
+        // Use readContract with from parameter for smart accounts
+        const portfolio = await readContract({
           contract,
-          method: "function getMyPortfolio() view returns ((address ethAddress, string ipfsDocumentHash, bool isPrivate, bool exists, uint256 createdAt, uint256 lastUpdated))",
+          method:
+            "function getMyPortfolio() view returns ((address ethAddress, string ipfsDocumentHash, bool isPrivate, bool exists, uint256 createdAt, uint256 lastUpdated))",
           params: [],
+          from: account.address as `0x${string}`, // Important for smart accounts!
         });
 
-        const rpcClient = getRpcClient({ client, chain: defaultChain });
-        const encodedData = await encode(transaction);
-        const resultHex = await eth_call(rpcClient, {
-          to: Web3PortfolioAddress,
-          data: encodedData,
-          from: account.address as `0x${string}`,
-        });
-
-        const { decodeAbiParameters } = await import("viem");
-        const decoded = decodeAbiParameters(
-          [
-            {
-              type: "tuple",
-              components: [
-                { name: "ethAddress", type: "address" },
-                { name: "ipfsDocumentHash", type: "string" },
-                { name: "isPrivate", type: "bool" },
-                { name: "exists", type: "bool" },
-                { name: "createdAt", type: "uint256" },
-                { name: "lastUpdated", type: "uint256" },
-              ],
-            },
-          ],
-          resultHex as `0x${string}`
-        );
-
-        const portfolio = decoded[0] as Portfolio;
+        console.log("✅ Portfolio loaded:", portfolio);
 
         if (portfolio.exists) {
           setHasPortfolio(true);
 
           // Fetch IPFS data
+          console.log("📦 Downloading IPFS data:", portfolio.ipfsDocumentHash);
           const response = await download({
             client,
             uri: portfolio.ipfsDocumentHash,
           });
           const data = await response.json();
+
+          console.log("✅ Portfolio data loaded:", data);
 
           setForm({
             name: data.name || "",
@@ -149,7 +133,7 @@ export default function UpdatePortfolioPage() {
             avatarUrl: data.avatarUrl || "",
           });
           setExistingUsername(data.name);
-          
+
           // Set existing avatar URL - use IPFS avatar if exists, otherwise generate from name
           if (data.avatarUrl) {
             // Convert IPFS URI to gateway URL for preview
@@ -161,18 +145,37 @@ export default function UpdatePortfolioPage() {
             );
           }
         } else {
+          console.log("ℹ️ Portfolio exists=false");
           setHasPortfolio(false);
         }
-      } catch (error) {
-        console.log("No existing portfolio found:", error);
-        setHasPortfolio(false);
+      } catch (error: any) {
+        console.error("❌ Error loading portfolio:", error);
+        console.log("Error details:", {
+          message: error.message,
+          cause: error.cause,
+          name: error.name,
+        });
+
+        // Check if it's a "Portfolio not found" error
+        if (
+          error.message?.includes("Portfolio not found") ||
+          error.message?.includes("execution reverted") ||
+          error.cause?.message?.includes("Portfolio not found")
+        ) {
+          console.log("ℹ️ No portfolio exists");
+          setHasPortfolio(false);
+        } else {
+          // Unexpected error
+          toast.error("Failed to load portfolio. Please try again.");
+          setHasPortfolio(false);
+        }
       } finally {
         setIsLoading(false);
       }
     }
 
     loadExistingPortfolio();
-  }, [account]);
+  }, [account?.address]);
 
   function handleChange(e: ChangeEvent<HTMLInputElement> | ChangeEvent<HTMLTextAreaElement>) {
     const { name, value } = e.target;
@@ -182,7 +185,7 @@ export default function UpdatePortfolioPage() {
   function handleAvatarChange(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (file) {
-      setAvatarFile(file); // Store file for IPFS upload
+      setAvatarFile(file);
       const reader = new FileReader();
       reader.onload = (event) => {
         if (typeof event.target?.result === "string") {
@@ -219,7 +222,7 @@ export default function UpdatePortfolioPage() {
           client,
           files: [avatarFile],
         });
-        console.log("Avatar IPFS URI:", avatarUri);
+        console.log("✅ Avatar IPFS URI:", avatarUri);
         portfolioData.avatarUrl = avatarUri;
       }
 
@@ -235,7 +238,7 @@ export default function UpdatePortfolioPage() {
         ],
       });
 
-      console.log("IPFS URI:", uri);
+      console.log("✅ Portfolio IPFS URI:", uri);
 
       toast.loading("Waiting for transaction signature...", { id: toastId });
 
@@ -251,8 +254,13 @@ export default function UpdatePortfolioPage() {
           toast.dismiss(toastId);
           toast.success("Portfolio updated successfully!");
 
-          console.log("tx", tx);
-          console.log("Transaction hash:", tx.transactionHash);
+          console.log("✅ Transaction successful:", tx.transactionHash);
+
+          const explorerUrl =
+            tx.chain.blockExplorers?.[0]?.url + "/tx/" + tx.transactionHash;
+          if (explorerUrl) {
+            toast.success(`View transaction: ${explorerUrl}`);
+          }
 
           setTimeout(() => {
             router.push("/");
@@ -260,13 +268,13 @@ export default function UpdatePortfolioPage() {
         },
         onError: (err) => {
           toast.dismiss(toastId);
-          console.error("Transaction failed:", err);
-          toast.error("Transaction failed. Check console.");
+          console.error("❌ Transaction failed:", err);
+          toast.error("Transaction failed. Check console for details.");
         },
       });
     } catch (error) {
       toast.dismiss(toastId);
-      console.error("Error:", error);
+      console.error("❌ Error during update:", error);
       toast.error("Something went wrong during upload.");
     }
   }
@@ -338,7 +346,7 @@ export default function UpdatePortfolioPage() {
                   style={{
                     backgroundColor: form.bgColor,
                     scrollbarWidth: "none",
-                    msOverflowStyle: "none"
+                    msOverflowStyle: "none",
                   }}
                 >
                   {/* Top section */}
@@ -360,14 +368,10 @@ export default function UpdatePortfolioPage() {
                       )}
                     </div>
 
-                    <h1 className="mt-3 text-xl font-semibold text-gray-900">
-                      {form.name}
-                    </h1>
+                    <h1 className="mt-3 text-xl font-semibold text-gray-900">{form.name}</h1>
                     <p className="text-sm text-gray-600">{form.role}</p>
                     {form.location && (
-                      <p className="mt-1 text-xs text-gray-500">
-                        📍 {form.location}
-                      </p>
+                      <p className="mt-1 text-xs text-gray-500">📍 {form.location}</p>
                     )}
 
                     {/* Contact pills */}
@@ -413,9 +417,7 @@ export default function UpdatePortfolioPage() {
                         <h2 className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-gray-500">
                           About
                         </h2>
-                        <p className="text-[11px] leading-snug text-gray-700">
-                          {form.about}
-                        </p>
+                        <p className="text-[11px] leading-snug text-gray-700">{form.about}</p>
                       </section>
                     )}
 
@@ -491,9 +493,7 @@ export default function UpdatePortfolioPage() {
           {/* RIGHT: scrollable form */}
           <div className="flex-1 bg-white rounded-2xl shadow-lg border border-gray-100 p-6 md:p-8">
             <div className="flex items-center justify-between mb-1">
-              <h1 className="text-2xl md:text-3xl font-bold text-gray-900">
-                Update Portfolio
-              </h1>
+              <h1 className="text-2xl md:text-3xl font-bold text-gray-900">Update Portfolio</h1>
               <span className="text-xs bg-blue-100 text-blue-700 px-3 py-1 rounded-full font-medium">
                 Editing
               </span>
@@ -515,9 +515,7 @@ export default function UpdatePortfolioPage() {
                     onChange={handleAvatarChange}
                     className="block w-full text-sm text-gray-700 file:mr-4 file:rounded-lg file:border-0 file:bg-gray-900 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-white hover:file:bg-black"
                   />
-                  <p className="mt-1 text-xs text-gray-400">
-                    Square images work best.
-                  </p>
+                  <p className="mt-1 text-xs text-gray-400">Square images work best.</p>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -575,9 +573,7 @@ export default function UpdatePortfolioPage() {
 
               <div className="grid gap-4 md:grid-cols-2">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Location
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Location</label>
                   <input
                     name="location"
                     value={form.location}
@@ -587,9 +583,7 @@ export default function UpdatePortfolioPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Email *
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Email *</label>
                   <input
                     type="email"
                     name="email"
@@ -616,9 +610,7 @@ export default function UpdatePortfolioPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    GitHub
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">GitHub</label>
                   <input
                     name="github"
                     value={form.github}
@@ -631,9 +623,7 @@ export default function UpdatePortfolioPage() {
 
               <div className="grid gap-4 md:grid-cols-2">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    LinkedIn
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">LinkedIn</label>
                   <input
                     name="linkedin"
                     value={form.linkedin}
@@ -643,9 +633,7 @@ export default function UpdatePortfolioPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Twitter
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Twitter</label>
                   <input
                     name="twitter"
                     value={form.twitter}
@@ -710,9 +698,7 @@ export default function UpdatePortfolioPage() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  About you
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">About you</label>
                 <textarea
                   name="about"
                   value={form.about}
@@ -734,11 +720,15 @@ export default function UpdatePortfolioPage() {
                   className="h-5 w-5 rounded border-gray-300 text-gray-900 focus:ring-gray-900 cursor-pointer"
                 />
                 <div>
-                  <label htmlFor="isPrivate" className="text-sm font-medium text-gray-700 cursor-pointer">
+                  <label
+                    htmlFor="isPrivate"
+                    className="text-sm font-medium text-gray-700 cursor-pointer"
+                  >
                     Make portfolio private
                   </label>
                   <p className="text-xs text-gray-500">
-                    Only you can view your portfolio. Others will see &quot;Private portfolio&quot; message.
+                    Only you can view your portfolio. Others will see &quot;Private portfolio&quot;
+                    message.
                   </p>
                 </div>
               </div>

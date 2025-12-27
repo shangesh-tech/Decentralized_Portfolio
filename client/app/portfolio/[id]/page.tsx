@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Github, Linkedin, Twitter, Globe, Loader2, Lock, AlertCircle } from "lucide-react";
+import { Github, Linkedin, Twitter, Globe, Loader2, Lock, AlertCircle, ExternalLink, Shield } from "lucide-react";
 import { getContract, getRpcClient, eth_getLogs, eth_blockNumber } from "thirdweb";
 import { download } from "thirdweb/storage";
 import { client } from "@/lib/client";
@@ -63,6 +63,12 @@ export default function PortfolioProfilePage() {
     const [error, setError] = useState<string | null>(null);
     const [isPrivate, setIsPrivate] = useState(false);
 
+    // Get chain explorer URL
+    const getExplorerUrl = () => {
+        const explorerBaseUrl = defaultChain.blockExplorers?.[0]?.url || "https://amoy.polygonscan.com";
+        return `${explorerBaseUrl}/address/${Web3PortfolioAddress}`;
+    };
+
     useEffect(() => {
         async function fetchPortfolio() {
             if (!walletAddress) return;
@@ -71,6 +77,8 @@ export default function PortfolioProfilePage() {
             setError(null);
 
             try {
+                console.log("📡 Fetching portfolio for:", walletAddress);
+
                 // Step 1: Get the PortfolioCreated event to find the username
                 const rpcClient = getRpcClient({ client, chain: defaultChain });
                 
@@ -108,6 +116,7 @@ export default function PortfolioProfilePage() {
                 }
 
                 if (!logs || logs.length === 0) {
+                    console.log("❌ No portfolio found");
                     setError("Portfolio not found for this address");
                     setIsLoading(false);
                     return;
@@ -121,6 +130,7 @@ export default function PortfolioProfilePage() {
                 });
 
                 const userName = decodedLog.args.userName;
+                console.log("✅ Found username:", userName);
 
                 // Step 2: Call getPortfolioByUsername to get portfolio data
                 const portfolioResult = await readContract({
@@ -129,6 +139,8 @@ export default function PortfolioProfilePage() {
                     params: [userName],
                 });
 
+                console.log("✅ Portfolio data:", portfolioResult);
+
                 if (!portfolioResult.exists) {
                     setError("Portfolio not found");
                     setIsLoading(false);
@@ -136,6 +148,7 @@ export default function PortfolioProfilePage() {
                 }
 
                 if (portfolioResult.isPrivate) {
+                    console.log("🔒 Portfolio is private");
                     setIsPrivate(true);
                     setError("This portfolio is private");
                     setIsLoading(false);
@@ -143,12 +156,14 @@ export default function PortfolioProfilePage() {
                 }
 
                 // Step 3: Fetch IPFS data
+                console.log("📦 Downloading IPFS data:", portfolioResult.ipfsDocumentHash);
                 const response = await download({
                     client,
                     uri: portfolioResult.ipfsDocumentHash,
                 });
 
                 const data = (await response.json()) as PortfolioData & { avatarUrl?: string };
+                console.log("✅ Portfolio loaded successfully");
 
                 // Transform data to profile format
                 const splitList = (value: string) =>
@@ -168,7 +183,7 @@ export default function PortfolioProfilePage() {
                     certificationsList: splitList(data.certifications),
                 });
             } catch (err: unknown) {
-                console.error("Error fetching portfolio:", err);
+                console.error("❌ Error fetching portfolio:", err);
                 const errorMessage = err instanceof Error ? err.message : "";
                 if (errorMessage.includes("Private portfolio")) {
                     setIsPrivate(true);
@@ -397,8 +412,27 @@ export default function PortfolioProfilePage() {
                             </div>
                         </div>
 
+                        {/* Verified Contract Section - Mobile */}
+                        <div className="mt-8 flex justify-center">
+                            <a
+                                href={getExplorerUrl()}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="group inline-flex items-center gap-2 px-4 py-2.5 rounded-full bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 hover:border-green-300 transition-all duration-300 hover:shadow-md"
+                            >
+                                <Shield className="w-4 h-4 text-green-600" />
+                                <div className="flex flex-col items-start">
+                                    <span className="text-xs font-medium text-green-700">Verified on Polygon</span>
+                                    <span className="text-[10px] text-green-600/70 font-mono">
+                                        {Web3PortfolioAddress.slice(0, 6)}...{Web3PortfolioAddress.slice(-4)}
+                                    </span>
+                                </div>
+                                <ExternalLink className="w-3 h-3 text-green-600 opacity-0 group-hover:opacity-100 transition-opacity" />
+                            </a>
+                        </div>
+
                         {/* Powered by section - Mobile */}
-                        <div className="mt-16 flex flex-col items-center animate-fade-in-up">
+                        <div className="mt-6 flex flex-col items-center animate-fade-in-up">
                             <div className="flex items-center gap-3 px-5 py-2.5 rounded-full bg-white/50 backdrop-blur-sm border border-white/60 shadow-sm hover:shadow-md transition-all duration-300">
                                 <span className="text-xs font-medium text-gray-500 tracking-wide uppercase">Powered by</span>
                                 <div className="flex items-center gap-2 pl-2 border-l border-gray-200">
@@ -708,8 +742,34 @@ export default function PortfolioProfilePage() {
                                 <div className="absolute -bottom-4 left-1/2 -translate-x-1/2 w-[100%] h-[20px] bg-black/20 blur-xl rounded-[50%]"></div>
                             </div>
 
+                            {/* Verified Contract Section - Desktop */}
+                            <div className="mt-12 flex justify-center">
+                                <a
+                                    href={getExplorerUrl()}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="group inline-flex items-center gap-3 px-6 py-3 rounded-full bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 hover:border-green-300 transition-all duration-300 hover:shadow-lg hover:scale-105"
+                                >
+                                    <div className="flex items-center justify-center w-10 h-10 rounded-full bg-green-100 group-hover:bg-green-200 transition-colors">
+                                        <Shield className="w-5 h-5 text-green-600" />
+                                    </div>
+                                    <div className="flex flex-col items-start">
+                                        <span className="text-sm font-semibold text-green-700 flex items-center gap-2">
+                                            Verified Blockchain Contract
+                                            <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-green-200 text-green-800">
+                                                Polygon 
+                                            </span>
+                                        </span>
+                                        <span className="text-xs text-green-600/70 font-mono mt-0.5">
+                                            {Web3PortfolioAddress}
+                                        </span>
+                                    </div>
+                                    <ExternalLink className="w-4 h-4 text-green-600 opacity-0 group-hover:opacity-100 transition-opacity" />
+                                </a>
+                            </div>
+
                             {/* Powered by section - Desktop */}
-                            <div className="mt-16 flex flex-col items-center animate-fade-in-up">
+                            <div className="mt-8 flex flex-col items-center animate-fade-in-up">
                                 <div className="flex items-center gap-3 px-5 py-2.5 rounded-full bg-white/50 backdrop-blur-sm border border-white/60 shadow-sm hover:shadow-md transition-all duration-300">
                                     <span className="text-xs font-medium text-gray-500 tracking-wide uppercase">Powered by</span>
                                     <div className="flex items-center gap-2 pl-2 border-l border-gray-200">

@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { useActiveAccount, useSendTransaction } from "thirdweb/react";
-import { getContract, prepareContractCall, eth_call, getRpcClient, encode } from "thirdweb";
+import { getContract, prepareContractCall, readContract } from "thirdweb";
 import { client } from "@/lib/client";
 import { defaultChain } from "@/lib/chains";
 import { Web3PortfolioAddress } from "@/lib/constant";
@@ -66,71 +66,60 @@ export default function Home() {
   const [portfolioData, setPortfolioData] = useState<PortfolioData | null>(null);
   const [isLoadingChain, setIsLoadingChain] = useState(false);
   const [isLoadingIPFS, setIsLoadingIPFS] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // Fetch portfolio from blockchain when account changes
   useEffect(() => {
     async function fetchPortfolio() {
-      if (!account) {
+      if (!account?.address) {
         setPortfolioFromChain(null);
         setPortfolioData(null);
+        setError(null);
         return;
       }
 
       setIsLoadingChain(true);
+      setError(null);
+      
       try {
-        // Prepare the contract call
-        const transaction = prepareContractCall({
+
+        const result = await readContract({
           contract,
-          method: "function getMyPortfolio() view returns ((address ethAddress, string ipfsDocumentHash, bool isPrivate, bool exists, uint256 createdAt, uint256 lastUpdated))",
+          method:
+            "function getMyPortfolio() view returns ((address ethAddress, string ipfsDocumentHash, bool isPrivate, bool exists, uint256 createdAt, uint256 lastUpdated))",
           params: [],
+          from: account.address as `0x${string}`, 
         });
-
-        // Get the RPC client
-        const rpcClient = getRpcClient({ client, chain: defaultChain });
-
-        // Make eth_call with the user's address as 'from' so msg.sender works
-        const encodedData = await encode(transaction);
-        const resultHex = await eth_call(rpcClient, {
-          to: Web3PortfolioAddress,
-          data: encodedData,
-          from: account.address as `0x${string}`, // This makes msg.sender = user's address
-        });
-
-        // Decode the result manually
-        // The result is ABI-encoded tuple: (address, string, bool, bool, uint256, uint256)
-        const { decodeAbiParameters } = await import("viem");
-        const decoded = decodeAbiParameters(
-          [
-            {
-              type: "tuple",
-              components: [
-                { name: "ethAddress", type: "address" },
-                { name: "ipfsDocumentHash", type: "string" },
-                { name: "isPrivate", type: "bool" },
-                { name: "exists", type: "bool" },
-                { name: "createdAt", type: "uint256" },
-                { name: "lastUpdated", type: "uint256" },
-              ],
-            },
-          ],
-          resultHex as `0x${string}`
-        );
-
-        const result = decoded[0] as Portfolio;
-        console.log("Portfolio from chain:", result);
 
         if (result.exists) {
-          setPortfolioFromChain(result);
+          setPortfolioFromChain(result as Portfolio);
         } else {
+          console.log("⚠️ Portfolio exists=false");
           setPortfolioFromChain(null);
         }
       } catch (error: any) {
-        console.error("Error reading contract:", error);
-        // If error contains "Portfolio not found", user has no portfolio
-        if (error.message?.includes("Portfolio not found") || error.message?.includes("execution reverted")) {
+        console.error("❌ Error reading contract:", error);
+        
+        // Detailed error logging
+        console.log("Error details:", {
+          message: error.message,
+          cause: error.cause,
+          code: error.code,
+          name: error.name,
+        });
+
+        if (
+          error.message?.includes("Portfolio not found") ||
+          error.message?.includes("execution reverted") ||
+          error.cause?.message?.includes("Portfolio not found")
+        ) {
+          console.log("No portfolio exists");
           setPortfolioFromChain(null);
+          setError(null);
         } else {
-          toast.error("Failed to load portfolio from blockchain");
+          // Unexpected error
+          const errorMsg = error.message || "Failed to load portfolio";
+          setError(errorMsg);
+          toast.error(errorMsg);
         }
       } finally {
         setIsLoadingChain(false);
@@ -138,10 +127,8 @@ export default function Home() {
     }
 
     fetchPortfolio();
-  }, [account]);
+  }, [account?.address]);
 
-
-  // Fetch IPFS data when portfolio exists
   useEffect(() => {
     async function fetchIPFSData() {
       if (!portfolioFromChain || !portfolioFromChain.exists) {
@@ -150,18 +137,21 @@ export default function Home() {
       }
 
       setIsLoadingIPFS(true);
+      
       try {
-        // Download from IPFS
+
         const response = await download({
           client,
           uri: portfolioFromChain.ipfsDocumentHash,
         });
 
         const json = await response.json();
+
         setPortfolioData(json as PortfolioData);
-      } catch (err) {
-        console.error("Failed to fetch IPFS data:", err);
+      } catch (err: any) {
+        console.error("❌ Failed to fetch IPFS data:", err);
         toast.error("Failed to load portfolio data from IPFS");
+        setError("Failed to load portfolio data from IPFS");
       } finally {
         setIsLoadingIPFS(false);
       }
@@ -195,20 +185,19 @@ export default function Home() {
         onSuccess: (tx) => {
           toast.dismiss(toastId);
           toast.success("Portfolio deleted successfully!");
-          console.log("Delete tx:", tx.transactionHash);
-          // Clear local state
+          console.log("✅ Delete tx:", tx.transactionHash);
           setPortfolioFromChain(null);
           setPortfolioData(null);
         },
         onError: (err) => {
           toast.dismiss(toastId);
-          console.error("Delete failed:", err);
+          console.error("❌ Delete failed:", err);
           toast.error("Failed to delete portfolio. Check console.");
         },
       });
     } catch (error) {
       toast.dismiss(toastId);
-      console.error("Error deleting portfolio:", error);
+      console.error("❌ Error deleting portfolio:", error);
       toast.error("Something went wrong.");
     }
   };
@@ -244,7 +233,26 @@ export default function Home() {
       <main className="flex min-h-[calc(100vh-80px)] items-center justify-center bg-gray-50">
         <div className="text-center">
           <Loader2 className="h-8 w-8 animate-spin text-gray-900 mx-auto mb-4" />
-          <p className="text-gray-600">Loading your portfolio...</p>
+          <p className="text-gray-600">
+            {isLoadingChain ? "Loading portfolio from blockchain..." : "Loading portfolio data..."}
+          </p>
+        </div>
+      </main>
+    );
+  }
+
+  if (error && !portfolioFromChain) {
+    return (
+      <main className="flex min-h-[calc(100vh-80px)] items-center justify-center bg-gray-50 px-4">
+        <div className="text-center max-w-md">
+          <h1 className="text-2xl font-bold text-red-600 mb-4">Error Loading Portfolio</h1>
+          <p className="text-gray-600 mb-4">{error}</p>
+          <button
+            onClick={() => window.location.reload()}
+            className="px-6 py-3 bg-gray-900 text-white rounded-lg font-semibold hover:bg-black transition"
+          >
+            Retry
+          </button>
         </div>
       </main>
     );
@@ -284,12 +292,12 @@ export default function Home() {
 
         <div className="overflow-hidden rounded-3xl bg-white shadow-xl ring-1 ring-gray-200/50">
           {/* Header / Cover area */}
-          <div 
+          <div
             className="h-32 sm:h-40"
-            style={{ 
-              background: portfolioData.bgColor 
+            style={{
+              background: portfolioData.bgColor
                 ? `linear-gradient(135deg, ${portfolioData.bgColor} 0%, #374151 100%)`
-                : 'linear-gradient(to right, #111827, #374151)'
+                : "linear-gradient(to right, #111827, #374151)",
             }}
           />
 
@@ -314,7 +322,7 @@ export default function Home() {
             </div>
 
             {/* Privacy Badge */}
-            <div className="absolute -top-4 left-6 sm:left-10">
+            <div className="absolute -top-30 left-6 sm:left-10">
               {portfolioFromChain.isPrivate ? (
                 <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-700 border border-amber-200">
                   <Lock className="h-3 w-3" /> Private
