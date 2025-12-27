@@ -264,7 +264,7 @@ export default function UpdatePortfolioPage() {
 
           setTimeout(() => {
             router.push("/");
-          }, 1500);
+          }, 5000);
         },
         onError: (err) => {
           toast.dismiss(toastId);
