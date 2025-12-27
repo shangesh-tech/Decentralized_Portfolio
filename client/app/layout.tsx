@@ -4,7 +4,7 @@ import "./globals.css";
 import { ThirdwebProvider } from "thirdweb/react";
 
 const geistSans = Geist({
-  subsets: ["ls atin"],
+  subsets: ["latin"],
   variable: "--font-geist-sans",
 });
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, ChangeEvent, FormEvent, useEffect } from "react";
-import { FaGithub, FaLinkedin, FaTwitter, FaGlobe } from "react-icons/fa";
+import { Github, Linkedin, Twitter, Globe } from "lucide-react";
 import { useActiveAccount, useSendTransaction } from "thirdweb/react";
 import { getContract, prepareContractCall } from "thirdweb";
 import { upload } from "thirdweb/storage";
@@ -216,7 +216,7 @@ export default function PortfolioOnboardPage() {
                       )}
                       {form.website && (
                         <span className="inline-flex items-center gap-1 rounded-full bg-white/80 px-3 py-1 text-gray-800 shadow-sm">
-                          <FaGlobe className="text-[10px]" />
+                          <Globe className="text-[10px]" />
                           {form.website}
                         </span>
                       )}
@@ -230,7 +230,7 @@ export default function PortfolioOnboardPage() {
                           className="hover:text-gray-900"
                           aria-label="GitHub"
                         >
-                          <FaGithub />
+                          <Github />
                         </a>
                       )}
                       {form.linkedin && (
@@ -239,7 +239,7 @@ export default function PortfolioOnboardPage() {
                           className="hover:text-gray-900"
                           aria-label="LinkedIn"
                         >
-                          <FaLinkedin />
+                          <Linkedin />
                         </a>
                       )}
                       {form.twitter && (
@@ -248,7 +248,7 @@ export default function PortfolioOnboardPage() {
                           className="hover:text-gray-900"
                           aria-label="Twitter"
                         >
-                          <FaTwitter />
+                          <Twitter />
                         </a>
                       )}
                     </div>
