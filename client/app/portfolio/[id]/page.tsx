@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { Github, Linkedin, Twitter, Globe } from "lucide-react";
 
 // Demo portfolio data
@@ -393,7 +392,7 @@ export default async function PortfolioProfilePage({ params }: PageProps) {
                                                                 )}
                                                                 {profile.website && (
                                                                     <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-4 py-2 text-sm text-gray-800 shadow-sm border border-gray-200">
-                                                                        <FaGlobe className="text-xs" />
+                                                                        <Globe className="text-xs" />
                                                                         {profile.website}
                                                                     </span>
                                                                 )}
@@ -408,7 +407,7 @@ export default async function PortfolioProfilePage({ params }: PageProps) {
                                                                         className="hover:text-gray-900 transition"
                                                                         aria-label="GitHub"
                                                                     >
-                                                                        <FaGithub />
+                                                                        <Github />
                                                                     </a>
                                                                 )}
                                                                 {profile.socials.linkedin && (
@@ -419,7 +418,7 @@ export default async function PortfolioProfilePage({ params }: PageProps) {
                                                                         className="hover:text-gray-900 transition"
                                                                         aria-label="LinkedIn"
                                                                     >
-                                                                        <FaLinkedin />
+                                                                        <Linkedin />
                                                                     </a>
                                                                 )}
                                                                 {profile.socials.twitter && (
@@ -430,7 +429,7 @@ export default async function PortfolioProfilePage({ params }: PageProps) {
                                                                         className="hover:text-gray-900 transition"
                                                                         aria-label="Twitter"
                                                                     >
-                                                                        <FaTwitter />
+                                                                        <Twitter />
                                                                     </a>
                                                                 )}
                                                             </div>
